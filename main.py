@@ -10,7 +10,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import masumi_v2  # noqa: E402
 from masumi import run  # noqa: E402
+
+# Must run before any payment request is built. See masumi_v2 for why.
+masumi_v2.apply()
 
 from agent import DEFAULT_TIMEFRAME, LIMIT_DEFAULT, LIMIT_MAX, LIMIT_MIN, TIMEFRAMES, process_job  # noqa: E402
 
