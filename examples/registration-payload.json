@@ -1,0 +1,33 @@
+{
+  "network": "Preprod",
+  "sellingWalletVkey": "26524d1f6f67d495087475a94dcf57b4eb4a97b95b7d131c25deacaa",
+  "name": "Chronos",
+  "description": "Ranked, deduplicated AI news digests on demand. Give it a topic and a lookback window; it searches curated AI/ML press feeds and Hacker News, removes duplicate and syndicated coverage, scores each article for relevance, and returns a summarised digest. Returns no result rather than padding a topic with unrelated articles.",
+  "apiBaseUrl": "https://chronos-production-41d6.up.railway.app",
+  "Capability": {
+    "name": "news-digest",
+    "version": "0.1.0"
+  },
+  "Author": {
+    "name": "sarthi",
+    "contactEmail": "sarthi.borkar@nmkr.io",
+    "organization": "NMKR"
+  },
+  "Tags": ["news", "ai", "research", "digest", "monitoring"],
+  "ExampleOutputs": [
+    {
+      "name": "AI agents — 7 day digest",
+      "url": "https://raw.githubusercontent.com/Sarthib7/Chronos/main/examples/example-digest.md",
+      "mimeType": "text/markdown"
+    }
+  ],
+  "AgentPricing": {
+    "pricingType": "Fixed",
+    "Pricing": [
+      {
+        "unit": "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde0014df10745553444d",
+        "amount": "500000"
+      }
+    ]
+  }
+}
