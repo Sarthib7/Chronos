@@ -112,11 +112,26 @@ class Digest:
      title+snippet, with title matches weighted double.
    - `recency`: `exp(-age_hours / 48)`.
    - `source_weight`: from `feeds.yaml`, default 1.0, normalized to 0..1.
-6. Sort by score, cut to `candidate_limit`.
+6. Drop every article with zero topic-word overlap, then sort by score and cut to
+   `candidate_limit`, letting no single source exceed a per-source cap.
 7. Summarize: one LLM call for the whole batch. Returns, per article, a ≤40-word summary
    and a 0..1 relevance score.
-8. Re-rank: `final = 0.6*relevance + 0.4*score`. Cut to `limit`.
+8. Re-rank: `final = 0.6*relevance + 0.4*score`. Apply the per-source cap again, then cut
+   to `limit`.
 9. Render markdown (default) or JSON.
+
+Two rules in those steps are product decisions, not implementation details:
+
+- **No off-topic filler.** An article with no overlap with the requested topic is dropped
+  even when that leaves the digest short or empty. A buyer asking for "cardano" and
+  receiving generic AI headlines has been handed filler, not an answer. An empty digest
+  says so plainly.
+- **Per-source cap, enforced on the final cut.** High-volume feeds (arXiv publishes
+  hundreds of same-day papers) otherwise take every slot and turn a news digest into a
+  paper list. The cap is `max(2, limit // 3)`. It is applied to the final ranking, not
+  only to the candidate pool — capping the pool achieves nothing if the final cut refills
+  from one loud source. A source may exceed its cap only when no other source can fill
+  the digest, since returning a short digest is worse than a slightly lopsided one.
 
 The top-N cut before step 7 is the cost control: the LLM sees ~15 articles per run
 regardless of how many were fetched.
@@ -162,7 +177,7 @@ as `None` so re-ranking falls back to `score`). A digest is always produced.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `OPENROUTER_API_KEY` | no | Enables LLM summaries. Absent → extractive fallback. |
+| `OPENROUTER_API_KEY` | no | Enables LLM summaries. Absent → extractive fallback. Values shorter than 20 characters after stripping are treated as absent, so a blank or stub value in the shell does not cause a doomed API call on every run. |
 | `OPENROUTER_MODEL` | no | Defaults to `google/gemini-2.5-flash-lite`. |
 | `HTTP_TIMEOUT` | no | Per-request timeout, default 15s. |
 
