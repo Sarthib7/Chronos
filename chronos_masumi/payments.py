@@ -17,6 +17,9 @@ SUBMIT_RESULT_MINUTES = 60 * 24
 
 # On-chain states that matter to a seller. The full set is larger; these are the
 # ones that change what we do next.
+SOURCE_TYPE_V1 = "Web3CardanoV1"
+SOURCE_TYPE_V2 = "Web3CardanoV2"
+
 STATE_FUNDS_LOCKED = "FundsLocked"
 STATE_RESULT_SUBMITTED = "ResultSubmitted"
 REFUND_STATES = {"RefundRequested", "Refunded", "FundsOrDatumInvalid", "Disputed"}
@@ -43,6 +46,8 @@ class PaymentClient:
     def __init__(self, settings: MasumiSettings, timeout: float = 30.0):
         self.settings = settings
         self.timeout = timeout
+        self._source_type: str | None = None
+        self._source_index: int = settings.source_index
 
     @property
     def _headers(self) -> dict:
@@ -61,14 +66,53 @@ class PaymentClient:
             raise PaymentError(f"{response.status_code}: {message}")
         return body.get("data", {})
 
+    async def detect_source(self) -> tuple[str | None, int]:
+        """Read the agent's own registry entry to learn its payment source type.
+
+        The index is required for Web3CardanoV2 and *forbidden* for V1, so
+        guessing wrong breaks every job. Rather than hardcode a version, ask the
+        registry what this agent actually is. Cached after the first lookup.
+        """
+        if self._source_type is not None:
+            return self._source_type, self._source_index
+
+        data = await self._request(
+            "GET",
+            "/registry/agent-identifier",
+            params={
+                "agentIdentifier": self.settings.agent_identifier,
+                "network": self.settings.network,
+            },
+        )
+        sources = (data.get("Metadata") or {}).get("supportedPaymentSources") or []
+        for position, source in enumerate(sources):
+            if source.get("network") == self.settings.network:
+                self._source_type = source.get("paymentSourceType")
+                self._source_index = position
+                logger.info(
+                    "agent registered as %s (source index %d)", self._source_type, position
+                )
+                return self._source_type, self._source_index
+
+        logger.warning("no payment source matched network %s; assuming configured default",
+                       self.settings.network)
+        self._source_type = ""
+        self._source_index = self.settings.source_index
+        return self._source_type, self._source_index
+
     async def create_payment(self, identifier_from_purchaser: str, input_hash: str) -> PaymentRequest:
         """Reserve payment for a job.
 
-        supportedPaymentSourceIndex is what the masumi SDK omits; without it a
-        Web3CardanoV2 agent cannot be paid at all. paymentSourceType is
-        deliberately not sent: the service derives it from the agent's registry
-        entry and rejects any value that disagrees with it.
+        paymentSourceType is deliberately never sent: the service derives it from
+        the agent's registry entry and rejects any value that disagrees with it.
+
+        supportedPaymentSourceIndex is sent only for V2 agents, because the API
+        documents it as "required for V2 Cardano payments and forbidden for V1".
+        The masumi SDK never sends it at all, which is why it cannot pay a V2
+        agent; sending it unconditionally would just break V1 agents instead.
         """
+        source_type, source_index = await self.detect_source()
+
         payload = {
             "agentIdentifier": self.settings.agent_identifier,
             "network": self.settings.network,
@@ -76,8 +120,10 @@ class PaymentClient:
             "inputHash": input_hash,
             "payByTime": _timestamp(PAY_BY_MINUTES),
             "submitResultTime": _timestamp(SUBMIT_RESULT_MINUTES),
-            "supportedPaymentSourceIndex": self.settings.source_index,
         }
+        if source_type != SOURCE_TYPE_V1:
+            payload["supportedPaymentSourceIndex"] = source_index
+
         data = await self._request("POST", "/payment", json=payload)
         return PaymentRequest(
             blockchain_identifier=data.get("blockchainIdentifier", ""),

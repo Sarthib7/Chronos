@@ -39,21 +39,64 @@ def restore_httpx():
     httpx.AsyncClient = original
 
 
-class TestCreatePayment:
-    async def test_sends_the_v2_source_index(self):
+def registry_response(source_type="Web3CardanoV2"):
+    return {"status": "success", "data": {"Metadata": {"supportedPaymentSources": [
+        {"chain": "Cardano", "network": "Preprod", "paymentSourceType": source_type}
+    ]}}}
+
+
+def routed(source_type="Web3CardanoV2", payment_response=None, capture=None):
+    """Handler answering both the registry lookup and the payment POST."""
+    import json as _json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "registry" in str(request.url):
+            return httpx.Response(200, json=registry_response(source_type))
+        if capture is not None:
+            capture["json"] = _json.loads(request.content)
+            capture["token"] = request.headers.get("token")
+        return httpx.Response(200, json=payment_response or {"status": "success", "data": {
+            "blockchainIdentifier": "abc123",
+            "payByTime": "1785333571000",
+            "RequestedFunds": [{"unit": "16a55b", "amount": "1000000"}],
+        }})
+
+    return handler
+
+
+class TestSourceDetection:
+    async def test_v2_agent_gets_the_index(self):
         captured = {}
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured["json"] = __import__("json").loads(request.content)
-            captured["token"] = request.headers.get("token")
-            return httpx.Response(200, json={"status": "success", "data": {
-                "blockchainIdentifier": "abc123",
-                "payByTime": "1785333571000",
-                "RequestedFunds": [{"unit": "16a55b", "amount": "1000000"}],
-            }})
-
-        payment = await client_with(handler).create_payment("e1b9f7", "a" * 64)
+        payment = await client_with(routed("Web3CardanoV2", capture=captured)).create_payment("e1b9f7", "a" * 64)
         assert captured["json"]["supportedPaymentSourceIndex"] == 0
+        assert payment.blockchain_identifier == "abc123"
+
+    async def test_v1_agent_must_not_get_the_index(self):
+        # The API documents the field as forbidden for V1; sending it anyway
+        # would break every job the moment an agent is registered as V1.
+        captured = {}
+        await client_with(routed("Web3CardanoV1", capture=captured)).create_payment("e1b9f7", "a" * 64)
+        assert "supportedPaymentSourceIndex" not in captured["json"]
+
+    async def test_detection_is_cached(self):
+        calls = []
+
+        def handler(request):
+            if "registry" in str(request.url):
+                calls.append(1)
+                return httpx.Response(200, json=registry_response())
+            return httpx.Response(200, json={"status": "success", "data": {"blockchainIdentifier": "x"}})
+
+        client = client_with(handler)
+        await client.create_payment("e1b9f7", "a" * 64)
+        await client.create_payment("e1b9f8", "b" * 64)
+        assert len(calls) == 1
+
+
+class TestCreatePayment:
+    async def test_sends_key_and_returns_payment_details(self):
+        captured = {}
+        payment = await client_with(routed(capture=captured)).create_payment("e1b9f7", "a" * 64)
         assert captured["token"] == "masumi-payment-testkey"
         assert payment.blockchain_identifier == "abc123"
         assert payment.requested_funds == [{"unit": "16a55b", "amount": "1000000"}]
@@ -62,23 +105,13 @@ class TestCreatePayment:
         # The service derives V1/V2 from the registry and rejects a mismatch,
         # so asserting a version can only ever break us.
         captured = {}
-
-        def handler(request):
-            captured["json"] = __import__("json").loads(request.content)
-            return httpx.Response(200, json={"status": "success", "data": {"blockchainIdentifier": "x"}})
-
-        await client_with(handler).create_payment("e1b9f7", "a" * 64)
+        await client_with(routed(capture=captured)).create_payment("e1b9f7", "a" * 64)
         assert "paymentSourceType" not in captured["json"]
         assert "paymentType" not in captured["json"]
 
     async def test_includes_required_fields(self):
         captured = {}
-
-        def handler(request):
-            captured["json"] = __import__("json").loads(request.content)
-            return httpx.Response(200, json={"status": "success", "data": {"blockchainIdentifier": "x"}})
-
-        await client_with(handler).create_payment("e1b9f7", "b" * 64)
+        await client_with(routed(capture=captured)).create_payment("e1b9f7", "b" * 64)
         for field in ("agentIdentifier", "network", "identifierFromPurchaser",
                       "inputHash", "payByTime", "submitResultTime"):
             assert field in captured["json"], field
