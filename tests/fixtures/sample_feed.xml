@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test AI Feed</title>
+    <link>https://example.com</link>
+    <description>Fixture feed</description>
+    <item>
+      <title>OpenAI ships agentic payments protocol</title>
+      <link>https://example.com/agentic-payments?utm_source=rss&amp;utm_medium=feed</link>
+      <description>&lt;p&gt;The new protocol lets agents settle invoices autonomously. It builds on prior work.&lt;/p&gt;</description>
+      <author>Jane Reporter</author>
+      <pubDate>Mon, 27 Jul 2026 09:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>A quiet week in robotics</title>
+      <link>https://example.com/robotics-week/</link>
+      <description>Nothing much happened in robotics this week.</description>
+      <pubDate>Sun, 26 Jul 2026 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Ancient history of computing</title>
+      <link>https://example.com/ancient</link>
+      <description>An old post that predates the query window.</description>
+      <pubDate>Tue, 01 Jan 2019 00:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Entry with no link at all</title>
+      <description>This one must be skipped without killing the feed.</description>
+      <pubDate>Mon, 27 Jul 2026 10:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

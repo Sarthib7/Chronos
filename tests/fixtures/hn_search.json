@@ -1,0 +1,38 @@
+{
+  "hits": [
+    {
+      "objectID": "40000001",
+      "title": "Show HN: An agent that pays for its own API calls",
+      "url": "https://example.org/agent-pays",
+      "author": "hnuser",
+      "points": 142,
+      "story_text": "",
+      "created_at_i": 1785150000
+    },
+    {
+      "objectID": "40000002",
+      "title": "Ask HN: How do you handle agentic payments?",
+      "url": null,
+      "author": "curious",
+      "points": 30,
+      "story_text": "<p>We are building a service and need advice.</p>",
+      "created_at_i": 1785060000
+    },
+    {
+      "objectID": "40000003",
+      "title": "Too old to matter",
+      "url": "https://example.org/old",
+      "author": "someone",
+      "points": 5,
+      "story_text": "",
+      "created_at_i": 1500000000
+    },
+    {
+      "objectID": "40000004",
+      "title": "",
+      "url": "https://example.org/untitled",
+      "points": 1,
+      "created_at_i": 1785150000
+    }
+  ]
+}
