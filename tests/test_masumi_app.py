@@ -143,3 +143,62 @@ class TestHealth:
         with build() as client:
             body = client.get("/health").json()
             assert body["status"] == "ok" and body["configured"] is True
+
+
+class TestInputDataShapes:
+    """MIP-003 documents input_data as key/value pairs; marketplace clients send that."""
+
+    def test_accepts_mip003_key_value_array(self):
+        with build() as client:
+            r = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER,
+                "input_data": [
+                    {"key": "topic", "value": "AI agents"},
+                    {"key": "timeframe", "value": "7d"},
+                    {"key": "limit", "value": 5},
+                ],
+            })
+            assert r.status_code == 200
+            assert r.json()["status"] == "awaiting_payment"
+
+    def test_object_and_array_forms_hash_identically(self):
+        # Same logical input must bind to the same payment, or decision logging
+        # would depend on which wire shape the buyer happened to use.
+        with build() as client:
+            as_object = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER,
+                "input_data": {"topic": "AI agents", "timeframe": "7d"},
+            }).json()["input_hash"]
+            as_array = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER,
+                "input_data": [
+                    {"key": "topic", "value": "AI agents"},
+                    {"key": "timeframe", "value": "7d"},
+                ],
+            }).json()["input_hash"]
+            assert as_object == as_array
+
+    def test_rejects_a_shape_it_cannot_interpret(self):
+        with build() as client:
+            r = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER, "input_data": "just a string"})
+            assert r.status_code == 422
+
+
+class TestDocsUsability:
+    def test_openapi_ships_a_valid_hex_example(self):
+        import re
+
+        with build() as client:
+            schema = client.get("/openapi.json").json()
+            examples = schema["components"]["schemas"]["StartJobRequest"]["examples"]
+            identifier = examples[0]["identifier_from_purchaser"]
+            # The default FastAPI placeholder is "string", which is not hex and
+            # makes the first click in Swagger fail.
+            assert re.match(r"^[0-9a-fA-F]+$", identifier)
+
+    def test_examples_cover_both_input_shapes(self):
+        with build() as client:
+            examples = client.get("/openapi.json").json()["components"]["schemas"]["StartJobRequest"]["examples"]
+            shapes = {type(e["input_data"]).__name__ for e in examples}
+            assert shapes == {"dict", "list"}

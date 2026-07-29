@@ -13,7 +13,7 @@ from agent import NoResultsError, process_job
 from chronos_masumi.config import MasumiSettings, load_masumi_settings
 from chronos_masumi.jobs import JobManager
 from chronos_masumi.payments import PaymentClient, PaymentError
-from chronos_masumi.schema import INPUT_SCHEMA
+from chronos_masumi.schema import INPUT_SCHEMA, normalize_input_data
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,48 @@ HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 MAX_ACTIVE_JOBS = 20
 
 
+EXAMPLE_IDENTIFIER = "a1b2c3d4e5f60718293a4b5c6d"
+EXAMPLE_INPUT = {"topic": "AI agents", "timeframe": "7d", "limit": 5}
+
+
 class StartJobRequest(BaseModel):
-    identifier_from_purchaser: str = Field(..., min_length=1, max_length=64)
-    input_data: dict
+    identifier_from_purchaser: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description=(
+            "A unique nonce identifying this purchase. Must be a hex string "
+            "(0-9, a-f) — the payment service rejects anything else."
+        ),
+        examples=[EXAMPLE_IDENTIFIER],
+    )
+    input_data: dict | list = Field(
+        ...,
+        description=(
+            "Job input, either as an object or as MIP-003 key/value pairs: "
+            '[{"key": "topic", "value": "AI agents"}]'
+        ),
+        examples=[EXAMPLE_INPUT],
+    )
+
+    # Without a worked example, Swagger's "Try it out" prefills
+    # identifier_from_purchaser with "string", which is not hex, so the first
+    # thing anyone reading the docs does is get a 400.
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"identifier_from_purchaser": EXAMPLE_IDENTIFIER, "input_data": EXAMPLE_INPUT},
+                {
+                    "identifier_from_purchaser": EXAMPLE_IDENTIFIER,
+                    "input_data": [
+                        {"key": "topic", "value": "AI agents"},
+                        {"key": "timeframe", "value": "7d"},
+                        {"key": "limit", "value": 5},
+                    ],
+                },
+            ]
+        }
+    }
 
 
 def create_app(settings: MasumiSettings | None = None, manager: JobManager | None = None) -> FastAPI:
@@ -76,7 +115,12 @@ def create_app(settings: MasumiSettings | None = None, manager: JobManager | Non
             raise HTTPException(503, "At capacity, try again shortly")
 
         try:
-            job = await manager.start_job(request.identifier_from_purchaser, request.input_data)
+            input_data = normalize_input_data(request.input_data)
+        except TypeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        try:
+            job = await manager.start_job(request.identifier_from_purchaser, input_data)
         except PaymentError as exc:
             logger.error("payment creation failed: %s", exc)
             raise HTTPException(502, f"Payment service rejected the request: {exc}") from exc
