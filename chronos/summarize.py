@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 SNIPPET_CHARS = 400
+ATTEMPTS = 2
+
+
+class UnparseableResponse(Exception):
+    """The call succeeded but the model did not return usable JSON."""
+
+
+class ProviderError(Exception):
+    """OpenRouter returned an error body rather than completions."""
 
 
 def _describe(exc: Exception) -> str:
@@ -25,6 +34,10 @@ def _describe(exc: Exception) -> str:
         return f"HTTP {exc.response.status_code}"
     if isinstance(exc, httpx.TimeoutException):
         return "timeout"
+    if isinstance(exc, UnparseableResponse):
+        return "unparseable response"
+    if isinstance(exc, ProviderError):
+        return f"provider error: {exc}"
     return type(exc).__name__
 
 SYSTEM_PROMPT = (
@@ -63,19 +76,28 @@ class OpenRouterSummarizer:
     async def run(self, articles: list[Article], topic: str) -> list[Article]:
         if not articles:
             return articles
-        try:
-            content = await self._call(articles, topic)
-            results = parse_llm_response(content)
-            if not results:
-                raise ValueError("no usable results in LLM response")
-            self._apply(articles, results)
-        except Exception as exc:
-            # Any failure — bad key, rate limit, malformed JSON — still yields a digest,
-            # but the reason is reported rather than silently swallowed.
-            reason = _describe(exc)
-            logger.warning("OpenRouter summarization failed (%s); using extractive", reason)
-            self.name = f"extractive (openrouter failed: {reason})"
-            return await self.fallback.run(articles, topic)
+
+        # Cheap models intermittently answer with prose instead of JSON. Observed
+        # once in normal use: a single retry recovers it, and silently serving
+        # extractive summaries for a paid job is worse than one extra call.
+        for attempt in range(ATTEMPTS):
+            try:
+                content = await self._call(articles, topic)
+                results = parse_llm_response(content)
+                if not results:
+                    raise UnparseableResponse("model returned no usable JSON")
+                self._apply(articles, results)
+                break
+            except Exception as exc:
+                reason = _describe(exc)
+                if attempt < ATTEMPTS - 1:
+                    logger.warning("OpenRouter attempt %d failed (%s); retrying", attempt + 1, reason)
+                    continue
+                # Any failure — bad key, rate limit, malformed JSON — still yields a
+                # digest, but the reason is reported rather than silently swallowed.
+                logger.warning("OpenRouter summarization failed (%s); using extractive", reason)
+                self.name = f"extractive (openrouter failed: {reason})"
+                return await self.fallback.run(articles, topic)
 
         # Any article the model skipped still needs a summary.
         missing = [a for a in articles if a.summary is None]
@@ -100,7 +122,14 @@ class OpenRouterSummarizer:
         async with httpx.AsyncClient(timeout=self.settings.http_timeout * 4) as client:
             response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+            body = response.json()
+
+        # OpenRouter reports some upstream failures in the body with HTTP 200.
+        # Without this the next line raises a bare KeyError and the digest footer
+        # blames "KeyError" instead of the actual provider error.
+        if "choices" not in body:
+            raise ProviderError(str(body.get("error", body))[:200])
+        return body["choices"][0]["message"]["content"]
 
     @staticmethod
     def _apply(articles: list[Article], results: list[dict]) -> None:

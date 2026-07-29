@@ -150,3 +150,56 @@ def test_user_prompt_numbers_articles_and_includes_topic():
     assert "Topic: agentic payments" in prompt
     assert "[0] First" in prompt
     assert "[1] Second" in prompt
+
+
+class TestRetry:
+    @pytest.fixture
+    def summarizer(self) -> OpenRouterSummarizer:
+        return OpenRouterSummarizer(
+            Settings(
+                openrouter_api_key="k" * 24,
+                openrouter_model="test/model",
+                http_timeout=5,
+            )
+        )
+
+    async def test_unparseable_response_is_retried_once_and_recovers(
+        self, summarizer, monkeypatch
+    ):
+        calls = []
+
+        async def flaky(articles, topic):
+            calls.append(1)
+            if len(calls) == 1:
+                return "sorry, here is some prose instead of json"
+            return '{"results": [{"index": 0, "summary": "Recovered", "relevance": 0.7}]}'
+
+        monkeypatch.setattr(summarizer, "_call", flaky)
+        article = make_article("T", "https://a.com/1", snippet="Body.")
+        await summarizer.run([article], "topic")
+        assert len(calls) == 2
+        assert article.summary == "Recovered"
+        assert "failed" not in summarizer.name
+
+    async def test_gives_up_after_the_retry(self, summarizer, monkeypatch):
+        calls = []
+
+        async def always_garbage(articles, topic):
+            calls.append(1)
+            return "never json"
+
+        monkeypatch.setattr(summarizer, "_call", always_garbage)
+        article = make_article("T", "https://a.com/1", snippet="Body text.")
+        await summarizer.run([article], "topic")
+        assert len(calls) == 2
+        assert article.summary == "Body text."
+        assert "unparseable response" in summarizer.name
+
+
+class TestProviderErrorBody:
+    async def test_error_body_with_http_200_is_reported_clearly(self, monkeypatch):
+        from chronos.summarize import ProviderError, _describe
+
+        assert _describe(ProviderError("rate limited upstream")) == (
+            "provider error: rate limited upstream"
+        )
