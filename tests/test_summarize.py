@@ -181,7 +181,9 @@ class TestRetry:
         assert article.summary == "Recovered"
         assert "failed" not in summarizer.name
 
-    async def test_gives_up_after_the_retry(self, summarizer, monkeypatch):
+    async def test_gives_up_after_exhausting_attempts(self, summarizer, monkeypatch):
+        from chronos.summarize import ATTEMPTS
+
         calls = []
 
         async def always_garbage(articles, topic):
@@ -191,7 +193,7 @@ class TestRetry:
         monkeypatch.setattr(summarizer, "_call", always_garbage)
         article = make_article("T", "https://a.com/1", snippet="Body text.")
         await summarizer.run([article], "topic")
-        assert len(calls) == 2
+        assert len(calls) == ATTEMPTS
         assert article.summary == "Body text."
         assert "unparseable response" in summarizer.name
 
@@ -203,3 +205,70 @@ class TestProviderErrorBody:
         assert _describe(ProviderError("rate limited upstream")) == (
             "provider error: rate limited upstream"
         )
+
+
+class TestSalvagePartial:
+    """Truncated responses observed in production: the provider cuts the body mid-array."""
+
+    TRUNCATED = (
+        '{"results": [{"index": 0, "summary": "Cyera is acquiring Oasis Security for '
+        '$1 billion, marking Cyera\'s third acquisition this year.", "relevance": 0.7}, '
+        '{"index": 1, "summary": "A second complete one.", "relevance": 0.5}, '
+        '{"index": 2, "summary": "cut off here'
+    )
+
+    def test_strict_parse_finds_nothing(self):
+        assert parse_llm_response(self.TRUNCATED) == []
+
+    def test_salvage_recovers_complete_objects(self):
+        from chronos.summarize import salvage_partial
+
+        results = salvage_partial(self.TRUNCATED)
+        assert [r["index"] for r in results] == [0, 1]
+        assert results[1]["summary"] == "A second complete one."
+
+    def test_salvage_drops_the_incomplete_tail(self):
+        from chronos.summarize import salvage_partial
+
+        assert all(r["index"] != 2 for r in salvage_partial(self.TRUNCATED))
+
+    def test_severely_truncated_yields_nothing(self):
+        from chronos.summarize import salvage_partial
+
+        assert salvage_partial('{"results": [{"index": 0, "summary": "Cyera is acq') == []
+
+    async def test_truncated_response_still_summarizes_what_arrived(self, monkeypatch):
+        summarizer = OpenRouterSummarizer(
+            Settings(openrouter_api_key="k" * 24, openrouter_model="m", http_timeout=5)
+        )
+
+        async def truncated(articles, topic):
+            return TestSalvagePartial.TRUNCATED
+
+        monkeypatch.setattr(summarizer, "_call", truncated)
+        first = make_article("A", "https://a.com/1", snippet="First body.")
+        second = make_article("B", "https://a.com/2", snippet="Second body.")
+        third = make_article("C", "https://a.com/3", snippet="Third body.")
+        await summarizer.run([first, second, third], "topic")
+
+        assert first.summary.startswith("Cyera is acquiring")
+        assert second.summary == "A second complete one."
+        assert third.summary == "Third body."          # backfilled extractively
+        assert "failed" not in summarizer.name          # not a degraded digest
+
+
+class TestTruncationDetection:
+    def test_error_finish_reason_is_labelled(self):
+        from chronos.summarize import TruncatedResponse, _describe
+
+        assert _describe(TruncatedResponse("generation aborted after 78 chars")) == (
+            "truncated: generation aborted after 78 chars"
+        )
+
+    def test_request_pins_providers_that_support_response_format(self):
+        import inspect
+
+        from chronos.summarize import OpenRouterSummarizer
+
+        source = inspect.getsource(OpenRouterSummarizer._call)
+        assert '"provider": {"require_parameters": True}' in source

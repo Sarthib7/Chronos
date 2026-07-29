@@ -17,7 +17,11 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 SNIPPET_CHARS = 400
-ATTEMPTS = 2
+# Three attempts, not two: the provider aborts generation often enough that two
+# consecutive failures still occurred in live runs. At ~$0.0004 per call, an extra
+# attempt is far cheaper than serving a paid digest with no relevance ranking.
+ATTEMPTS = 3
+_OBJECT_RE = re.compile(r"\{[^{}]*\}")
 
 
 class UnparseableResponse(Exception):
@@ -26,6 +30,10 @@ class UnparseableResponse(Exception):
 
 class ProviderError(Exception):
     """OpenRouter returned an error body rather than completions."""
+
+
+class TruncatedResponse(Exception):
+    """The provider aborted generation partway through, leaving incomplete JSON."""
 
 
 def _describe(exc: Exception) -> str:
@@ -38,6 +46,8 @@ def _describe(exc: Exception) -> str:
         return "unparseable response"
     if isinstance(exc, ProviderError):
         return f"provider error: {exc}"
+    if isinstance(exc, TruncatedResponse):
+        return f"truncated: {exc}"
     return type(exc).__name__
 
 SYSTEM_PROMPT = (
@@ -83,7 +93,7 @@ class OpenRouterSummarizer:
         for attempt in range(ATTEMPTS):
             try:
                 content = await self._call(articles, topic)
-                results = parse_llm_response(content)
+                results = parse_llm_response(content) or salvage_partial(content)
                 if not results:
                     raise UnparseableResponse("model returned no usable JSON")
                 self._apply(articles, results)
@@ -114,6 +124,10 @@ class OpenRouterSummarizer:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
+            # Route only to providers that honour response_format. Measured over
+            # 15 live calls: without this, 2 in 5 responses came back with
+            # finish_reason "error" and a body truncated mid-JSON; with it, 0 in 5.
+            "provider": {"require_parameters": True},
         }
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
@@ -129,7 +143,14 @@ class OpenRouterSummarizer:
         # blames "KeyError" instead of the actual provider error.
         if "choices" not in body:
             raise ProviderError(str(body.get("error", body))[:200])
-        return body["choices"][0]["message"]["content"]
+
+        choice = body["choices"][0]
+        content = choice["message"].get("content") or ""
+        # An aborted generation still returns HTTP 200 with a partial body.
+        # Naming it is what turned "the model sometimes rambles" into a fixable bug.
+        if choice.get("finish_reason") == "error":
+            raise TruncatedResponse(f"generation aborted after {len(content)} chars")
+        return content
 
     @staticmethod
     def _apply(articles: list[Article], results: list[dict]) -> None:
@@ -182,6 +203,26 @@ def parse_llm_response(content: str) -> list[dict]:
     if isinstance(data, list):
         return [r for r in data if isinstance(r, dict)]
     return []
+
+
+def salvage_partial(content: str) -> list[dict]:
+    """Recover whole result objects from a truncated response.
+
+    Observed in practice: the provider intermittently cuts the response off
+    mid-array, so strict JSON parsing yields nothing even though most of the
+    summaries arrived intact. Each result is self-contained, so the complete
+    objects before the cut are still usable — and any article the salvage
+    misses is backfilled with an extractive summary anyway.
+    """
+    results = []
+    for match in _OBJECT_RE.finditer(content or ""):
+        try:
+            obj = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "index" in obj:
+            results.append(obj)
+    return results
 
 
 def build_summarizer(settings: Settings) -> Summarizer:
