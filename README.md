@@ -10,16 +10,42 @@ service. Phase 3 registers it on Masumi and lists it on Sokosumi. See
 ## As a Masumi agent
 
 ```bash
-uv run masumi run main.py --standalone --input '{"topic": "AI agents", "timeframe": "7d", "limit": 5}'
-uv run masumi run main.py     # MIP-003 API server; needs AGENT_IDENTIFIER + PAYMENT_API_KEY
+uv run python main.py          # MIP-003 API server on $PORT (default 8080)
 ```
 
-`main.py` declares the input schema, `agent.py` translates a job into a `Query` and the
-resulting `Digest` into markdown. The `masumi` SDK (>=1.2.0) provides the four MIP-003
-endpoints, payment polling and decision logging, so there is no hand-rolled HTTP layer.
+Live: <https://chronos-production-41d6.up.railway.app> — `/docs` for Swagger.
+
+`chronos_masumi/` implements MIP-003 and the payment flow directly against the payment
+service's HTTP API. The `masumi` SDK is deliberately **not** used: it cannot create
+payments for agents registered as `Web3CardanoV2`, because it never sends
+`supportedPaymentSourceIndex` and builds its request payload inline with no extension
+point. See `chronos_masumi/payments.py`.
+
+| Module | Responsibility |
+|---|---|
+| `hashing.py` | MIP-004 input/output hashes |
+| `payments.py` | Payment service client, V1/V2 detection |
+| `jobs.py` | Job lifecycle and payment polling |
+| `app.py` | MIP-003 endpoints |
+| `schema.py` | Buyer-facing input schema |
+
+Three behaviours are contractual rather than stylistic:
+
+- **Hashing is a faithful reimplementation.** Buyers recompute these and dispute on
+  mismatch, so input uses JCS canonical JSON and output is JSON-escaped before hashing.
+- **`paymentSourceType` is never sent.** The service derives it from the registry entry
+  and rejects any value that disagrees.
+- **The decision hash is submitted before the result is exposed**, and a failed job
+  submits nothing — never claim work that was not delivered.
+
+`input_data` accepts both a plain object and MIP-003 key/value pairs
+(`[{"key": "topic", "value": "AI agents"}]`); both produce the same input hash.
 
 A job with no matching articles raises `NoResultsError` and fails rather than returning
 an empty digest — billing for zero results invites a dispute.
+
+Known limit: jobs are held in memory, so a restart loses in-flight work. Acceptable on
+Preprod; needs a persistent store before mainnet.
 
 Additional `.env` values for API mode:
 
