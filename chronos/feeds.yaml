@@ -1,0 +1,47 @@
+# Curated AI news RSS sources.
+# weight: relative trust/signal, used as one term in ranking. Higher = better.
+# Validate with: python -m chronos.validate_feeds
+
+feeds:
+  - name: techcrunch-ai
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+    weight: 1.0
+  - name: venturebeat-ai
+    url: https://venturebeat.com/category/ai/feed/
+    weight: 0.9
+  - name: the-verge-ai
+    url: https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
+    weight: 0.9
+  - name: ars-technica
+    url: https://feeds.arstechnica.com/arstechnica/technology-lab
+    weight: 0.9
+  - name: mit-tech-review-ai
+    url: https://www.technologyreview.com/topic/artificial-intelligence/feed
+    weight: 1.0
+  - name: the-decoder
+    url: https://the-decoder.com/feed/
+    weight: 0.8
+  - name: marktechpost
+    url: https://www.marktechpost.com/feed/
+    weight: 0.6
+  - name: openai
+    url: https://openai.com/news/rss.xml
+    weight: 1.0
+  - name: google-deepmind
+    url: https://deepmind.google/blog/rss.xml
+    weight: 1.0
+  - name: huggingface
+    url: https://huggingface.co/blog/feed.xml
+    weight: 0.8
+  - name: simon-willison
+    url: https://simonwillison.net/atom/everything/
+    weight: 0.9
+  - name: bair-berkeley
+    url: https://bair.berkeley.edu/blog/feed.xml
+    weight: 0.8
+  - name: arxiv-cs-ai
+    url: http://export.arxiv.org/rss/cs.AI
+    weight: 0.6
+  - name: import-ai
+    url: https://importai.substack.com/feed
+    weight: 0.9
