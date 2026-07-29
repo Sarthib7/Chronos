@@ -3,9 +3,33 @@
 An AI news agent. Give it a topic and a time window; it returns a ranked, deduplicated
 digest with short summaries.
 
-Phase 1 (this repo today) is the scraper core plus a CLI. Phase 2 wraps it in a MIP-003
-HTTP service; phase 3 registers it on Masumi and lists it on Sokosumi. See
+Phase 1 is the scraper core plus a CLI. Phase 2 (done) exposes it as a Masumi agentic
+service. Phase 3 registers it on Masumi and lists it on Sokosumi. See
 `docs/superpowers/specs/2026-07-29-chronos-news-scraper-design.md`.
+
+## As a Masumi agent
+
+```bash
+uv run masumi run main.py --standalone --input '{"topic": "AI agents", "timeframe": "7d", "limit": 5}'
+uv run masumi run main.py     # MIP-003 API server; needs AGENT_IDENTIFIER + PAYMENT_API_KEY
+```
+
+`main.py` declares the input schema, `agent.py` translates a job into a `Query` and the
+resulting `Digest` into markdown. The `masumi` SDK (>=1.2.0) provides the four MIP-003
+endpoints, payment polling and decision logging, so there is no hand-rolled HTTP layer.
+
+A job with no matching articles raises `NoResultsError` and fails rather than returning
+an empty digest — billing for zero results invites a dispute.
+
+Additional `.env` values for API mode:
+
+```
+PAYMENT_API_KEY=...      # from the Masumi Payment Service admin dashboard
+PAYMENT_SERVICE_URL=https://payment.masumi.network/api/v1
+NETWORK=Preprod
+AGENT_IDENTIFIER=...     # issued after on-chain registration
+SELLER_VKEY=...          # from your selling wallet
+```
 
 ## Quick start
 
