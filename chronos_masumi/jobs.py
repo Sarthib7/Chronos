@@ -37,8 +37,12 @@ class Job:
     input_data: dict
     status: str = AWAITING_PAYMENT
     blockchain_identifier: str = ""
-    pay_by_time: str | None = None
-    submit_result_time: str | None = None
+    pay_by_time: int | None = None
+    submit_result_time: int | None = None
+    unlock_time: int | None = None
+    external_dispute_unlock_time: int | None = None
+    agent_identifier: str = ""
+    seller_vkey: str = ""
     requested_funds: list[dict] = field(default_factory=list)
     input_hash: str = ""
     output_hash: str | None = None
@@ -88,6 +92,10 @@ class JobManager:
         job.blockchain_identifier = payment.blockchain_identifier
         job.pay_by_time = payment.pay_by_time
         job.submit_result_time = payment.submit_result_time
+        job.unlock_time = payment.unlock_time
+        job.external_dispute_unlock_time = payment.external_dispute_unlock_time
+        job.agent_identifier = payment.agent_identifier
+        job.seller_vkey = payment.seller_vkey
         job.requested_funds = payment.requested_funds
 
         self.jobs[job.id] = job

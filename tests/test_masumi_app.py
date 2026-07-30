@@ -29,8 +29,16 @@ class FakePayments:
     async def create_payment(self, identifier, input_hash):
         if self.fail:
             raise self.fail
-        return PaymentRequest("chain-1", "1785333571000", "1785340000000",
-                              [{"unit": "16a55b", "amount": "1000000"}])
+        return PaymentRequest(
+            blockchain_identifier="chain-1",
+            pay_by_time=1785333571000,
+            submit_result_time=1785340000000,
+            unlock_time=1785361600000,
+            external_dispute_unlock_time=1785383200000,
+            agent_identifier="67ab0c92" + "f" * 50,
+            seller_vkey="26524d1f",
+            requested_funds=[{"unit": "16a55b", "amount": "1000000"}],
+        )
 
     async def payment_state(self, blockchain_identifier):
         return None
@@ -87,6 +95,29 @@ class TestStartJob:
             assert body["status"] == "awaiting_payment"
             assert body["blockchainIdentifier"] == "chain-1"
             assert len(body["input_hash"]) == 64
+
+    def test_returns_every_field_mip003_requires(self):
+        # A buyer builds POST /purchase from this response alone. They have no
+        # key for our payment node, so anything omitted here is unrecoverable
+        # and the agent becomes unpayable by anyone outside our own account.
+        with build() as client:
+            body = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER,
+                "input_data": {"topic": "AI agents"},
+            }).json()
+
+        for name in ("id", "blockchainIdentifier", "agentIdentifier", "sellerVKey",
+                     "identifierFromPurchaser", "input_hash"):
+            assert body.get(name), f"missing or empty: {name}"
+        for name in ("payByTime", "submitResultTime", "unlockTime",
+                     "externalDisputeUnlockTime"):
+            # Unix milliseconds as integers. Seconds would be the wrong value:
+            # the seller signature in blockchainIdentifier covers milliseconds.
+            assert isinstance(body.get(name), int), f"{name} must be an int"
+            assert body[name] > 1_700_000_000_000, f"{name} looks like seconds"
+
+        assert body["identifierFromPurchaser"] == BUYER
+        assert body["id"] == body["job_id"]
 
     def test_rejects_non_hex_identifier_with_a_usable_message(self):
         with build() as client:

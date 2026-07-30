@@ -125,14 +125,25 @@ def create_app(settings: MasumiSettings | None = None, manager: JobManager | Non
             logger.error("payment creation failed: %s", exc)
             raise HTTPException(502, f"Payment service rejected the request: {exc}") from exc
 
+        # The ten MIP-003 fields first. A buyer builds POST /purchase straight
+        # from these, and holds no credentials on our payment node, so a field
+        # missing here is one they cannot look up anywhere else.
         return {
-            "job_id": job.id,
-            "identifier_from_seller": job.id,
+            "id": job.id,
             "blockchainIdentifier": job.blockchain_identifier,
             "payByTime": job.pay_by_time,
             "submitResultTime": job.submit_result_time,
-            "requestedFunds": job.requested_funds,
+            "unlockTime": job.unlock_time,
+            "externalDisputeUnlockTime": job.external_dispute_unlock_time,
+            "agentIdentifier": job.agent_identifier,
+            "sellerVKey": job.seller_vkey,
+            "identifierFromPurchaser": job.identifier_from_purchaser,
             "input_hash": job.input_hash,
+            # Beyond the standard: job_id predates it and /status still takes
+            # that name, and requestedFunds saves the buyer a registry lookup.
+            "job_id": job.id,
+            "identifier_from_seller": job.id,
+            "requestedFunds": job.requested_funds,
             "status": job.status,
         }
 

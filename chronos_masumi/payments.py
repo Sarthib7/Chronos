@@ -43,15 +43,43 @@ class PaymentError(Exception):
 
 @dataclass
 class PaymentRequest:
+    """Everything a buyer needs to pay for a job.
+
+    MIP-003 requires the seller to hand back the unlock times, the agent
+    identifier and the seller key. A buyer has no credentials on the seller's
+    payment node, so anything withheld here cannot be recovered and the buyer
+    cannot build POST /purchase at all.
+    """
+
     blockchain_identifier: str
-    pay_by_time: str | None
-    submit_result_time: str | None
+    pay_by_time: int | None
+    submit_result_time: int | None
+    unlock_time: int | None
+    external_dispute_unlock_time: int | None
+    agent_identifier: str
+    seller_vkey: str
     requested_funds: list[dict]
 
 
 def _timestamp(minutes: int) -> str:
     moment = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     return moment.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _millis(value) -> int | None:
+    """The service sends unix milliseconds as strings; MIP-003 wants integers.
+
+    Kept in milliseconds rather than converted to seconds: the seller signature
+    inside the blockchainIdentifier covers the millisecond values, so a buyer
+    echoing anything else fails the signature check.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.warning("payment service sent an unparseable timestamp: %r", value)
+        return None
 
 
 class PaymentClient:
@@ -184,10 +212,15 @@ class PaymentClient:
             payload["supportedPaymentSourceIndex"] = source_index
 
         data = await self._request("POST", "/payment", json=payload)
+        wallet = data.get("SmartContractWallet") or {}
         return PaymentRequest(
             blockchain_identifier=data.get("blockchainIdentifier", ""),
-            pay_by_time=data.get("payByTime"),
-            submit_result_time=data.get("submitResultTime"),
+            pay_by_time=_millis(data.get("payByTime")),
+            submit_result_time=_millis(data.get("submitResultTime")),
+            unlock_time=_millis(data.get("unlockTime")),
+            external_dispute_unlock_time=_millis(data.get("externalDisputeUnlockTime")),
+            agent_identifier=data.get("agentIdentifier") or self.settings.agent_identifier,
+            seller_vkey=wallet.get("walletVkey") or self.settings.seller_vkey,
             requested_funds=data.get("RequestedFunds") or data.get("Amounts") or [],
         )
 

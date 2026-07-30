@@ -174,6 +174,30 @@ class TestCreatePayment:
                       "inputHash", "payByTime", "submitResultTime"):
             assert field in captured["json"], field
 
+    async def test_keeps_the_fields_a_buyer_cannot_look_up(self):
+        response = {"status": "success", "data": {
+            "blockchainIdentifier": "abc123",
+            "payByTime": "1785333571000",
+            "submitResultTime": "1785340000000",
+            "unlockTime": "1785361600000",
+            "externalDisputeUnlockTime": "1785383200000",
+            "agentIdentifier": "67ab0c92" + "e" * 50,
+            "SmartContractWallet": {"walletVkey": "26524d1fdeadbeef"},
+            "RequestedFunds": [{"unit": "16a55b", "amount": "1000000"}],
+        }}
+        payment = await client_with(routed(payment_response=response)).create_payment("e1b9f7", "a" * 64)
+        assert payment.unlock_time == 1785361600000
+        assert payment.external_dispute_unlock_time == 1785383200000
+        assert payment.seller_vkey == "26524d1fdeadbeef"
+        assert payment.agent_identifier.startswith("67ab0c92")
+
+    async def test_falls_back_to_configured_identity_when_absent(self):
+        response = {"status": "success", "data": {"blockchainIdentifier": "abc123"}}
+        payment = await client_with(routed(payment_response=response)).create_payment("e1b9f7", "a" * 64)
+        assert payment.seller_vkey == SETTINGS.seller_vkey
+        assert payment.agent_identifier == SETTINGS.agent_identifier
+        assert payment.unlock_time is None
+
     async def test_error_body_raises_payment_error(self):
         def handler(request):
             return httpx.Response(400, json={"status": "error", "error": {

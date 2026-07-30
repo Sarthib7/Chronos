@@ -24,8 +24,12 @@ class FakePayments:
         self.created.append((identifier, input_hash))
         return PaymentRequest(
             blockchain_identifier="chain-1",
-            pay_by_time="1785333571000",
-            submit_result_time="1785340000000",
+            pay_by_time=1785333571000,
+            submit_result_time=1785340000000,
+            unlock_time=1785361600000,
+            external_dispute_unlock_time=1785383200000,
+            agent_identifier="67ab0c92" + "f" * 50,
+            seller_vkey="26524d1f",
             requested_funds=[{"unit": "16a55b", "amount": "1000000"}],
         )
 
