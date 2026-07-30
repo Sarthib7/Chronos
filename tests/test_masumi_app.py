@@ -92,9 +92,11 @@ class TestStartJob:
             })
             assert r.status_code == 200
             body = r.json()
-            assert body["status"] == "awaiting_payment"
             assert body["blockchainIdentifier"] == "chain-1"
             assert len(body["input_hash"]) == 64
+            # The job state lives on /status; MIP-003 keeps it out of this body.
+            state = client.get("/status", params={"job_id": body["id"]}).json()
+            assert state["status"] == "awaiting_payment"
 
     def test_returns_every_field_mip003_requires(self):
         # A buyer builds POST /purchase from this response alone. They have no
@@ -117,7 +119,22 @@ class TestStartJob:
             assert body[name] > 1_700_000_000_000, f"{name} looks like seconds"
 
         assert body["identifierFromPurchaser"] == BUYER
-        assert body["id"] == body["job_id"]
+
+    def test_returns_nothing_beyond_the_standard(self):
+        # A consumer validating against a strict schema rejects the entire body
+        # over one unrecognised key, so an extra field is as fatal as a missing
+        # one. identifier_from_seller in particular is not in the standard.
+        with build() as client:
+            body = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER,
+                "input_data": {"topic": "AI agents"},
+            }).json()
+
+        assert set(body) == {
+            "id", "blockchainIdentifier", "payByTime", "submitResultTime",
+            "unlockTime", "externalDisputeUnlockTime", "agentIdentifier",
+            "sellerVKey", "identifierFromPurchaser", "input_hash",
+        }
 
     def test_rejects_non_hex_identifier_with_a_usable_message(self):
         with build() as client:
@@ -153,7 +170,7 @@ class TestStatus:
             job_id = client.post("/start_job", json={
                 "identifier_from_purchaser": BUYER,
                 "input_data": {"topic": "AI agents"},
-            }).json()["job_id"]
+            }).json()["id"]
 
             body = client.get("/status", params={"job_id": job_id}).json()
             assert body["job_id"] == job_id
@@ -190,7 +207,7 @@ class TestInputDataShapes:
                 ],
             })
             assert r.status_code == 200
-            assert r.json()["status"] == "awaiting_payment"
+            assert len(r.json()["input_hash"]) == 64
 
     def test_object_and_array_forms_hash_identically(self):
         # Same logical input must bind to the same payment, or decision logging
