@@ -22,7 +22,19 @@ SOURCE_TYPE_V2 = "Web3CardanoV2"
 
 STATE_FUNDS_LOCKED = "FundsLocked"
 STATE_RESULT_SUBMITTED = "ResultSubmitted"
-REFUND_STATES = {"RefundRequested", "Refunded", "FundsOrDatumInvalid", "Disputed"}
+
+# Every state from which a job can no longer be delivered and paid. Taken from
+# the service's own onChainState enum: FundsLocked, FundsOrDatumInvalid,
+# ResultSubmitted, RefundRequested, Disputed, WithdrawAuthorized,
+# RefundAuthorized, Withdrawn, RefundWithdrawn, DisputedWithdrawn.
+TERMINAL_FAILURE_STATES = {
+    "FundsOrDatumInvalid",
+    "RefundRequested",
+    "Disputed",
+    "RefundAuthorized",
+    "RefundWithdrawn",
+    "DisputedWithdrawn",
+}
 
 
 class PaymentError(Exception):
@@ -46,17 +58,18 @@ class PaymentClient:
     def __init__(self, settings: MasumiSettings, timeout: float = 30.0):
         self.settings = settings
         self.timeout = timeout
-        self._source_type: str | None = None
-        self._source_index: int = settings.source_index
+        self._detected: tuple[str, int | None] | None = None
 
     @property
     def _headers(self) -> dict:
         return {"token": self.settings.payment_api_key}
 
-    async def _request(self, method: str, path: str, **kwargs) -> dict:
+    async def _request(self, method: str, path: str, missing_ok: bool = False, **kwargs) -> dict | None:
         url = f"{self.settings.payment_service_url}{path}"
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             response = await client.request(method, url, headers=self._headers, **kwargs)
+        if response.status_code == 404 and missing_ok:
+            return None
         try:
             body = response.json()
         except ValueError:
@@ -66,39 +79,85 @@ class PaymentClient:
             raise PaymentError(f"{response.status_code}: {message}")
         return body.get("data", {})
 
-    async def detect_source(self) -> tuple[str | None, int]:
+    async def detect_source(self) -> tuple[str, int | None]:
         """Read the agent's own registry entry to learn its payment source type.
 
         The index is required for Web3CardanoV2 and *forbidden* for V1, so
         guessing wrong breaks every job. Rather than hardcode a version, ask the
         registry what this agent actually is. Cached after the first lookup.
+
+        This deliberately uses GET /registry and not GET /registry/agent-identifier.
+        The latter runs its sources through filterValidSupportedPaymentSources(),
+        which drops entries for other networks, so a position in its array is not
+        the position POST /payment indexes into. GET /registry serialises the
+        persisted sources sorted by position and never removes a row.
+
+        Nothing here falls back to a guess: an index sent to a V1 agent, or the
+        wrong index sent to a V2 one, is rejected or bills the wrong price.
         """
-        if self._source_type is not None:
-            return self._source_type, self._source_index
+        if self._detected is not None:
+            return self._detected
 
         data = await self._request(
             "GET",
-            "/registry/agent-identifier",
+            "/registry",
             params={
-                "agentIdentifier": self.settings.agent_identifier,
                 "network": self.settings.network,
+                "filterAgentIdentifier": self.settings.agent_identifier,
+                "limit": 1,
             },
         )
-        sources = (data.get("Metadata") or {}).get("supportedPaymentSources") or []
-        for position, source in enumerate(sources):
-            if source.get("network") == self.settings.network:
-                self._source_type = source.get("paymentSourceType")
-                self._source_index = position
-                logger.info(
-                    "agent registered as %s (source index %d)", self._source_type, position
-                )
-                return self._source_type, self._source_index
+        entries = data.get("Assets") or []
+        if not entries:
+            raise PaymentError(
+                f"agent {self.settings.agent_identifier} is not in this node's registry "
+                f"on {self.settings.network}; cannot tell V1 from V2"
+            )
 
-        logger.warning("no payment source matched network %s; assuming configured default",
-                       self.settings.network)
-        self._source_type = ""
-        self._source_index = self.settings.source_index
-        return self._source_type, self._source_index
+        sources = entries[0].get("supportedPaymentSources") or []
+        if not sources:
+            # V1 registrations carry no supported sources; pricing lives in AgentPricing.
+            logger.info("agent registered as %s (no source index sent)", SOURCE_TYPE_V1)
+            self._detected = (SOURCE_TYPE_V1, None)
+            return self._detected
+
+        payable = [
+            position
+            for position, source in enumerate(sources)
+            if source.get("chain") == "Cardano"
+            and source.get("network") == self.settings.network
+            and source.get("paymentSourceType") == SOURCE_TYPE_V2
+        ]
+        self._detected = (SOURCE_TYPE_V2, self._choose_index(payable))
+        logger.info("agent registered as %s (source index %s)", *self._detected)
+        return self._detected
+
+    def _choose_index(self, payable: list[int]) -> int:
+        """Pick which priced source to sell through.
+
+        For V2 the index selects the price, so an ambiguous choice is a wrong
+        bill rather than a technicality.
+        """
+        configured = self.settings.source_index
+        if configured is not None:
+            if configured not in payable:
+                raise PaymentError(
+                    f"PAYMENT_SOURCE_INDEX={configured} is not a payable "
+                    f"{SOURCE_TYPE_V2} source on {self.settings.network}; "
+                    f"advertised indexes: {payable or 'none'}"
+                )
+            return configured
+        if not payable:
+            raise PaymentError(
+                f"agent advertises no {SOURCE_TYPE_V2} Cardano source on "
+                f"{self.settings.network}"
+            )
+        if len(payable) > 1:
+            raise PaymentError(
+                f"agent advertises {len(payable)} priced sources at indexes {payable}; "
+                "set PAYMENT_SOURCE_INDEX to choose one"
+            )
+        return payable[0]
 
     async def create_payment(self, identifier_from_purchaser: str, input_hash: str) -> PaymentRequest:
         """Reserve payment for a job.
@@ -121,7 +180,7 @@ class PaymentClient:
             "payByTime": _timestamp(PAY_BY_MINUTES),
             "submitResultTime": _timestamp(SUBMIT_RESULT_MINUTES),
         }
-        if source_type != SOURCE_TYPE_V1:
+        if source_index is not None:
             payload["supportedPaymentSourceIndex"] = source_index
 
         data = await self._request("POST", "/payment", json=payload)
@@ -135,16 +194,33 @@ class PaymentClient:
     async def payment_state(self, blockchain_identifier: str) -> str | None:
         """Current on-chain state, or None if the payment is not visible yet.
 
-        The service exposes no lookup by blockchainIdentifier, so this pages the
-        recent payments and matches locally.
+        Resolved by identifier rather than by listing. GET /payment defaults to
+        Web3CardanoV1 when given neither filterPaymentSourceType nor
+        filterSmartContractAddress, so a V2 payment is simply absent from that
+        list and the seller waits forever on funds that are already locked.
+        This endpoint takes the identifier directly and is version-agnostic.
         """
         data = await self._request(
-            "GET", "/payment", params={"network": self.settings.network, "limit": 100}
+            "POST",
+            "/payment/resolve-blockchain-identifier",
+            missing_ok=True,
+            json={
+                "network": self.settings.network,
+                "blockchainIdentifier": blockchain_identifier,
+            },
         )
-        for payment in data.get("Payments", []) or []:
-            if payment.get("blockchainIdentifier") == blockchain_identifier:
-                return payment.get("onChainState")
-        return None
+        if data is None:
+            return None
+
+        action = data.get("NextAction") or {}
+        if action.get("errorNote"):
+            logger.warning(
+                "payment %s needs %s: %s",
+                blockchain_identifier[:16],
+                action.get("requestedAction"),
+                action["errorNote"],
+            )
+        return data.get("onChainState")
 
     async def submit_result(self, blockchain_identifier: str, output_hash: str) -> dict:
         """Publish the decision hash on-chain, which starts the dispute window."""

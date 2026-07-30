@@ -11,8 +11,8 @@ from typing import Awaitable, Callable
 
 from chronos_masumi.hashing import input_hash, output_hash
 from chronos_masumi.payments import (
-    REFUND_STATES,
     STATE_FUNDS_LOCKED,
+    TERMINAL_FAILURE_STATES,
     PaymentClient,
     PaymentError,
 )
@@ -132,7 +132,7 @@ class JobManager:
             if state == STATE_FUNDS_LOCKED:
                 logger.info("job %s funded, executing", job.id)
                 await self.execute(job)
-            elif state in REFUND_STATES:
+            elif state in TERMINAL_FAILURE_STATES:
                 job.status = REFUNDED
                 job.error = f"payment state: {state}"
                 logger.info("job %s refunded/disputed (%s)", job.id, state)
