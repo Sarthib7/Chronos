@@ -133,8 +133,19 @@ class TestStartJob:
         assert set(body) == {
             "id", "blockchainIdentifier", "payByTime", "submitResultTime",
             "unlockTime", "externalDisputeUnlockTime", "agentIdentifier",
-            "sellerVKey", "identifierFromPurchaser", "input_hash",
+            "sellerVKey", "identifierFromPurchaser", "input_hash", "inputHash",
         }
+
+    def test_carries_the_hash_under_both_spellings(self):
+        # MIP-003's table says input_hash; the masumi SDK ships inputHash and
+        # notes that Sokosumi expects camelCase. Answer to both.
+        with build() as client:
+            body = client.post("/start_job", json={
+                "identifier_from_purchaser": BUYER,
+                "input_data": {"topic": "AI agents"},
+            }).json()
+        assert body["inputHash"] == body["input_hash"]
+        assert len(body["inputHash"]) == 64
 
     def test_rejects_non_hex_identifier_with_a_usable_message(self):
         with build() as client:

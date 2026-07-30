@@ -51,8 +51,13 @@ class Job:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def public_state(self) -> dict:
-        """Only what a buyer is entitled to see."""
-        body = {"job_id": self.id, "status": self.status}
+        """Only what a buyer is entitled to see.
+
+        Carries the id under both names: the masumi SDK's StatusResponse calls
+        it `id`, while `job_id` is what this agent has always returned and what
+        /status takes as its query parameter.
+        """
+        body = {"id": self.id, "job_id": self.id, "status": self.status}
         if self.status == AWAITING_PAYMENT:
             body["blockchainIdentifier"] = self.blockchain_identifier
             body["payByTime"] = self.pay_by_time

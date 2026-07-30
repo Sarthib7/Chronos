@@ -125,13 +125,17 @@ def create_app(settings: MasumiSettings | None = None, manager: JobManager | Non
             logger.error("payment creation failed: %s", exc)
             raise HTTPException(502, f"Payment service rejected the request: {exc}") from exc
 
-        # Exactly the ten fields MIP-003 defines, and nothing else. A buyer
-        # builds POST /purchase straight from these and holds no credentials on
-        # our payment node, so a missing field is one they cannot look up
-        # anywhere else. Extra keys are equally unsafe: a consumer validating
-        # this response against a strict schema rejects the whole body over one
-        # unrecognised name, so convenience fields do not belong here.
+        # The ten fields MIP-003 defines. A buyer builds POST /purchase straight
+        # from these and holds no credentials on our payment node, so a missing
+        # field is one they cannot look up anywhere else.
+        #
+        # The hash goes out under both spellings. MIP-003's table names it
+        # input_hash, but the masumi SDK serialises StartJobResponse with
+        # serialize_by_alias and comments that Sokosumi expects the camelCase
+        # inputHash. Consumers strip keys they do not know and reject the body
+        # for ones they need, so answering to both names is the safe side.
         return {
+            "inputHash": job.input_hash,
             "id": job.id,
             "blockchainIdentifier": job.blockchain_identifier,
             "payByTime": job.pay_by_time,
